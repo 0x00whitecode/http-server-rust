@@ -2,7 +2,7 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
 
 fn handle_request(mut stream: TcpStream, request: String, directory: String) {
@@ -67,6 +67,7 @@ fn main() {
 
     // Bind to localhost:4221
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    println!("Server listening on 127.0.0.1:4221...");
 
     // Listen for incoming TCP connections
     for stream in listener.incoming() {
