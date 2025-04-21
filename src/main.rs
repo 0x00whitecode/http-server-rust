@@ -45,6 +45,24 @@ fn main() {
                                 stream.write_all(response.as_bytes()).unwrap();
                                 continue;
                             }
+
+                            // Handle /user-agent
+                            if path == "/user-agent" {
+                                // Look for the User-Agent header
+                                if let Some(user_agent_line) = request.lines()
+                                    .find(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+                                {
+                                    let user_agent_value = user_agent_line.splitn(2, ":").nth(1).unwrap().trim();
+                                    let content_length = user_agent_value.len();
+
+                                    let response = format!(
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                                        content_length, user_agent_value
+                                    );
+                                    stream.write_all(response.as_bytes()).unwrap();
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
