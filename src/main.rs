@@ -1,8 +1,70 @@
-use std::net::TcpListener;
+use std::env;
+use std::fs::File;
 use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::thread;
 
+fn handle_request(mut stream: TcpStream, request: String, directory: String) {
+    // Parse the HTTP request
+    if let Some(request_line) = request.lines().next() {
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let method = parts[0];
+            let path = parts[1];
+
+            if method == "GET" {
+                // Handle /files/{filename} path
+                if path.starts_with("/files/") {
+                    let filename = &path[7..]; // Extract filename from /files/{filename}
+
+                    let file_path = format!("{}/{}", directory, filename); // Build the full path
+
+                    // Check if the file exists in the directory
+                    if Path::new(&file_path).exists() {
+                        // File exists, send it back
+                        let mut file = File::open(file_path).unwrap();
+                        let mut contents = Vec::new();
+                        file.read_to_end(&mut contents).unwrap();
+                        let content_length = contents.len();
+
+                        // Response header
+                        let response_header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                            content_length
+                        );
+
+                        // Write header and file content
+                        stream.write_all(response_header.as_bytes()).unwrap();
+                        stream.write_all(&contents).unwrap();
+                        return;
+                    } else {
+                        // File does not exist, send 404
+                        let response = "HTTP/1.1 404 Not Found\r\n\r\n";
+                        stream.write_all(response.as_bytes()).unwrap();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // Default to 404 if no conditions matched
+    let response = "HTTP/1.1 404 Not Found\r\n\r\n";
+    stream.write_all(response.as_bytes()).unwrap();
+}
+
 fn main() {
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    let directory = match args.get(1) {
+        Some(arg) if arg == "--directory" => args.get(2).expect("Directory path missing"),
+        _ => {
+            eprintln!("Usage: ./your_program.sh --directory <directory_path>");
+            return;
+        }
+    };
+
     // Bind to localhost:4221
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
@@ -13,66 +75,15 @@ fn main() {
                 println!("Accepted new connection");
 
                 // Handle each connection in a separate thread
-                thread::spawn(move || {
-                    // Read the HTTP request into a buffer
-                    let mut buffer = [0; 1024];
-                    let _ = stream.read(&mut buffer).unwrap();
-                    let request = String::from_utf8_lossy(&buffer);
+                thread::spawn({
+                    let directory = directory.clone(); // Clone the directory string
+                    move || {
+                        let mut buffer = [0; 1024];
+                        let _ = stream.read(&mut buffer).unwrap();
+                        let request = String::from_utf8_lossy(&buffer);
 
-                    // Parse the request line
-                    if let Some(request_line) = request.lines().next() {
-                        let parts: Vec<&str> = request_line.split_whitespace().collect();
-
-                        if parts.len() >= 2 {
-                            let method = parts[0];
-                            let path = parts[1];
-
-                            // Handle only GET requests
-                            if method == "GET" {
-                                // Handle root path "/"
-                                if path == "/" {
-                                    let response = "HTTP/1.1 200 OK\r\n\r\n";
-                                    stream.write_all(response.as_bytes()).unwrap();
-                                    return;
-                                }
-
-                                // Handle /echo/{str} path
-                                if path.starts_with("/echo/") {
-                                    let echo_str = &path[6..]; // remove "/echo/"
-                                    let content_length = echo_str.len();
-
-                                    let response = format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                                        content_length, echo_str
-                                    );
-                                    stream.write_all(response.as_bytes()).unwrap();
-                                    return;
-                                }
-
-                                // Handle /user-agent path
-                                if path == "/user-agent" {
-                                    // Look for the User-Agent header
-                                    if let Some(user_agent_line) = request.lines()
-                                        .find(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
-                                    {
-                                        let user_agent_value = user_agent_line.splitn(2, ":").nth(1).unwrap().trim();
-                                        let content_length = user_agent_value.len();
-
-                                        let response = format!(
-                                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                                            content_length, user_agent_value
-                                        );
-                                        stream.write_all(response.as_bytes()).unwrap();
-                                        return;
-                                    }
-                                }
-                            }
-                        }
+                        handle_request(stream, request.to_string(), directory);
                     }
-
-                    // Default to 404 if no conditions matched
-                    let response = "HTTP/1.1 404 Not Found\r\n\r\n";
-                    stream.write_all(response.as_bytes()).unwrap();
                 });
             }
             Err(e) => {
