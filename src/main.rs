@@ -1,94 +1,89 @@
-use std::env;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
-use std::thread;
+use std::{env, fs, io::Write, net::TcpListener, path::{Path, PathBuf}, thread};
+use std::io::{Read, Write as IoWrite};
 
-fn handle_request(mut stream: TcpStream, request: String, directory: String) {
-    // Parse the HTTP request
-    if let Some(request_line) = request.lines().next() {
-        let parts: Vec<&str> = request_line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let method = parts[0];
-            let path = parts[1];
+fn handle_request(mut stream: std::net::TcpStream, request: String) {
+    let mut resp = String::new();
+    let not_found_resp = "HTTP/1.1 404 Not Found\r\n\r\n";
 
-            if method == "GET" {
-                // Handle /files/{filename} path
-                if path.starts_with("/files/") {
-                    let filename = &path[7..]; // Extract filename from /files/{filename}
+    // Check if the path starts with "/files"
+    if request.starts_with("GET /files") {
+        // Extract the file name from the request path
+        let file_name = request.split_whitespace().nth(1).unwrap_or("");
+        if file_name.starts_with("/files/") {
+            let file_name = file_name.trim_start_matches("/files/");
 
-                    let file_path = format!("{}/{}", directory, filename); // Build the full path
+            // Get the directory from the environment arguments
+            let env_args: Vec<String> = env::args().collect();
+            if env_args.len() < 3 {
+                let error_msg = "Usage: ./your_program.sh --directory <directory_path>";
+                resp = format!("HTTP/1.1 400 Bad Request\r\n\r\n{}", error_msg);
+                stream.write_all(resp.as_bytes()).unwrap();
+                return;
+            }
 
-                    // Check if the file exists in the directory
-                    if Path::new(&file_path).exists() {
-                        // File exists, send it back
-                        let mut file = File::open(file_path).unwrap();
-                        let mut contents = Vec::new();
-                        file.read_to_end(&mut contents).unwrap();
-                        let content_length = contents.len();
+            let mut dir = env_args[2].clone();
+            dir.push_str(&file_name); // Append the file name to the directory path
 
-                        // Response header
-                        let response_header = format!(
+            let path = Path::new(&dir);
+            if path.exists() && path.is_file() {
+                // Read the file content
+                match fs::read(path) {
+                    Ok(fc) => {
+                        // Serve the file content as binary (don't convert to string)
+                        resp = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-                            content_length
+                            fc.len()
                         );
-
-                        // Write header and file content
-                        stream.write_all(response_header.as_bytes()).unwrap();
-                        stream.write_all(&contents).unwrap();
-                        return;
-                    } else {
-                        // File does not exist, send 404
-                        let response = "HTTP/1.1 404 Not Found\r\n\r\n";
-                        stream.write_all(response.as_bytes()).unwrap();
-                        return;
+                        // Write the response header first
+                        stream.write_all(resp.as_bytes()).unwrap();
+                        // Then send the file contents
+                        stream.write_all(&fc).unwrap();
+                    }
+                    Err(_) => {
+                        resp = not_found_resp.to_string();
+                        stream.write_all(resp.as_bytes()).unwrap();
                     }
                 }
+            } else {
+                // If file doesn't exist
+                resp = not_found_resp.to_string();
+                stream.write_all(resp.as_bytes()).unwrap();
             }
         }
+    } else {
+        // Handle non-GET requests or other errors
+        resp = not_found_resp.to_string();
+        stream.write_all(resp.as_bytes()).unwrap();
     }
-
-    // Default to 404 if no conditions matched
-    let response = "HTTP/1.1 404 Not Found\r\n\r\n";
-    stream.write_all(response.as_bytes()).unwrap();
 }
 
 fn main() {
-    // Parse command line arguments
+    // Get command line arguments
     let args: Vec<String> = env::args().collect();
-    let directory = match args.get(1) {
-        Some(arg) if arg == "--directory" => args.get(2).expect("Directory path missing"),
-        _ => {
-            eprintln!("Usage: ./your_program.sh --directory <directory_path>");
-            return;
-        }
-    };
+    if args.len() < 3 || args[1] != "--directory" {
+        eprintln!("Usage: ./your_program.sh --directory <directory_path>");
+        return;
+    }
+    let directory = &args[2];
 
-    // Bind to localhost:4221
+    // Start the server
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     println!("Server listening on 127.0.0.1:4221...");
 
-    // Listen for incoming TCP connections
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                println!("Accepted new connection");
-
-                // Handle each connection in a separate thread
-                thread::spawn({
-                    let directory = directory.clone(); // Clone the directory string
-                    move || {
-                        let mut buffer = [0; 1024];
-                        let _ = stream.read(&mut buffer).unwrap();
-                        let request = String::from_utf8_lossy(&buffer);
-
-                        handle_request(stream, request.to_string(), directory);
-                    }
+                let mut buffer = [0; 1024];
+                let _ = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer);
+                // Handle each request in a separate thread
+                let directory_clone = directory.to_string();
+                thread::spawn(move || {
+                    handle_request(stream, request.to_string());
                 });
             }
-            Err(e) => {
-                println!("Connection error: {}", e);
+            Err(_) => {
+                eprintln!("Error accepting connection.");
             }
         }
     }
