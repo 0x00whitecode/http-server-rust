@@ -1,6 +1,8 @@
 use std::{env, fs, io::Write, net::TcpListener, path::{Path, PathBuf}, thread};
 use std::io::{Read, Write as IoWrite};
 
+//added fix to the codebase
+
 fn handle_request(mut stream: std::net::TcpStream, request: String) {
     let mut resp = String::new();
     let not_found_resp = "HTTP/1.1 404 Not Found\r\n\r\n";
